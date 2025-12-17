@@ -26,27 +26,27 @@ public class RobotController : MonoBehaviour
     [SerializeField] private Transform R3S;
     [SerializeField] private Transform ORS;
 
- // --- TUNING PARAMETERS (Adjust these in code if needed) ---
+    // --- TUNING PARAMETERS (Adjust these in code if needed) ---
     // Max torque (power) applied to wheels
-    private float maxMotorTorque = 300f; 
+    private float maxMotorTorque = 250f;  // Reduced max speed
     // Max steering angle in degrees
-    private float maxSteeringAngle = 35f; 
+    private float maxSteeringAngle = 45f; 
     // Brake torque applied when stopping for obstacles
     private float brakeTorque = 1000f;   
     
     // PID Control Variables
     // P: How hard to turn based on current error
-    private float Kp = 10.0f; 
+    private float Kp = 15.0f; 
     // I: Accumulates error over time (helps with angled slopes)
-    private float Ki = 0.05f; 
+    private float Ki = 0.1f; 
     // D: Dampens the movement (stops wobbling)
-    private float Kd = 5.0f;  
+    private float Kd = 8.0f;  
 
     private float lastError = 0f;
     private float integral = 0f;
 
     // Raycast settings
-    private float rayDistance = 2.0f;
+    private float rayDistance = 4.0f;  // Increased for earlier edge detection
     private float obstacleDetectionDist = 3.0f;
 
     private void Start()
@@ -54,7 +54,7 @@ public class RobotController : MonoBehaviour
         // 1. Configure Sensors
         // The instructions allow us to rotate sensors in code. 
         // We rotate them 90 degrees on X so 'transform.forward' points down at the track.
-        Quaternion facingDown = Quaternion.Euler(90, 0, 0);
+        Quaternion facingDown = Quaternion.Euler(-90, 0, 0);
         
         if(L1S) L1S.localRotation = facingDown;
         if(L2S) L2S.localRotation = facingDown;
@@ -80,43 +80,46 @@ public class RobotController : MonoBehaviour
 
     private void HandleSensingAndSteering()
     {
-        // --- 1. Calculate Error (Weighted Average) ---
-        // We assign values to sensors:
-        // L3: -3, L2: -2, L1: -1, R1: 1, R2: 2, R3: 3
+        // --- 1. Calculate Error for ROAD/PATH FOLLOWING ---
+        // For a road with edges on both sides, the robot should stay in the middle
+        // where sensors DON'T detect the edges.
+        // If left sensors hit edge → steer RIGHT (away from edge)
+        // If right sensors hit edge → steer LEFT (away from edge)
         
-        float weightedSum = 0f;
-        float sumOfActiveSensors = 0f;
+        int leftHits = 0;
+        int rightHits = 0;
 
-        // Helper function to check line (returns 1 if hit line, 0 if not)
-        // We assume the track is DIFFERENT from the floor. 
-        // If track is black (low intensity) or a specific tag, adjust 'CheckLine' logic.
-        // Here we assume standard Raycast: Hit = Line found.
+        // Count edge detections on each side
+        leftHits += CheckSensor(L3S);
+        leftHits += CheckSensor(L2S);
+        leftHits += CheckSensor(L1S);
         
-        weightedSum += CheckSensor(L3S) * -3.0f;
-        weightedSum += CheckSensor(L2S) * -2.0f;
-        weightedSum += CheckSensor(L1S) * -1.0f;
-        weightedSum += CheckSensor(R1S) * 1.0f;
-        weightedSum += CheckSensor(R2S) * 2.0f;
-        weightedSum += CheckSensor(R3S) * 3.0f;
+        rightHits += CheckSensor(R3S);
+        rightHits += CheckSensor(R2S);
+        rightHits += CheckSensor(R1S);
 
-        sumOfActiveSensors += CheckSensor(L3S);
-        sumOfActiveSensors += CheckSensor(L2S);
-        sumOfActiveSensors += CheckSensor(L1S);
-        sumOfActiveSensors += CheckSensor(R1S);
-        sumOfActiveSensors += CheckSensor(R2S);
-        sumOfActiveSensors += CheckSensor(R3S);
-
+        // Calculate error based on which side detects the edge
         float currentError = 0f;
         
-        if (sumOfActiveSensors > 0)
+        if (leftHits > 0 && rightHits == 0)
         {
-            currentError = weightedSum / sumOfActiveSensors;
+            // Left sensors see edge → too far left → steer RIGHT (positive error)
+            currentError = leftHits * 4.0f;  // Increased reaction
+        }
+        else if (rightHits > 0 && leftHits == 0)
+        {
+            // Right sensors see edge → too far right → steer LEFT (negative error)
+            currentError = -rightHits * 4.0f;  // Increased reaction
+        }
+        else if (leftHits > 0 && rightHits > 0)
+        {
+            // Both sides see edges → calculate balance to stay centered
+            currentError = (leftHits - rightHits) * 3.0f;  // Increased reaction
         }
         else
         {
-            // If no line is seen, use the last known error to "search" in that direction
-            // This handles gaps or sharp turns where we lose the line briefly
-            currentError = lastError > 0 ? 3.0f : -3.0f;
+            // No edges detected → continue straight or use last error
+            currentError = lastError * 0.5f;
         }
 
         // --- 2. PID Calculations ---
@@ -143,11 +146,19 @@ public class RobotController : MonoBehaviour
         FRC.steerAngle = steerAngle;
 
         // --- 4. Apply Throttle ---
-        // Smart Speed: Slow down if the steering angle is sharp (Cornering)
-        // If error is low (straight), go full speed. If error is high (turn), go slow.
-        float speedFactor = 1.0f - Mathf.Abs(steerAngle / maxSteeringAngle);
-        // Clamp minimum speed so we don't stop completely in turns
-        speedFactor = Mathf.Clamp(speedFactor, 0.4f, 1.0f); 
+        // Smart Speed: Slow down AGGRESSIVELY if the steering angle is sharp (Cornering)
+        // If error is low (straight), go full speed. If error is high (turn), go very slow.
+        
+        // More aggressive speed reduction based on steering
+        float speedFactor = 1.0f - (Mathf.Abs(steerAngle / maxSteeringAngle) * 2.0f);  // Even more aggressive
+        // Also reduce speed based on error magnitude (anticipate turns)
+        float errorFactor = 1.0f - (Mathf.Abs(currentError) / 8.0f);  // React to smaller errors
+        
+        // Combine both factors (use the lower one)
+        speedFactor = Mathf.Min(speedFactor, errorFactor);
+        
+        // Clamp minimum speed - allow very slow speeds in sharp turns
+        speedFactor = Mathf.Clamp(speedFactor, 0.1f, 1.0f);  // Can go as slow as 10%
 
         float currentTorque = maxMotorTorque * speedFactor;
 
@@ -209,12 +220,12 @@ public class RobotController : MonoBehaviour
             // Visualize the ray
             Debug.DrawLine(sensor.position, hit.point, Color.cyan);
 
-            // LOGIC: How do we know it's the line?
+            // LOGIC: How do we know it's the line/edge?
             // Option A: Tag check (if the track has a tag)
             // Option B: Color/Texture check (advanced)
             // Option C: The track is raised or specific layer
             
-            // Assuming standard coursework simulation where "Hit" means "Track detected" 
+            // Assuming standard coursework simulation where "Hit" means "Track/Edge detected" 
             // OR the floor is on a different layer. 
             // If the floor is detected everywhere, we need to check the object name or tag.
             
