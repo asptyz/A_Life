@@ -28,9 +28,10 @@ public class RobotController : MonoBehaviour
 
     // --- TUNING PARAMETERS (Adjust these in code if needed) ---
     // Max torque (power) applied to wheels
-    private float maxMotorTorque = 250f;  // Reduced max speed
+    private float maxMotorTorque = 250f;  
+    // Reduced max speed
     // Max steering angle in degrees
-    private float maxSteeringAngle = 45f; 
+    private float maxSteeringAngle = 1000f; 
     // Brake torque applied when stopping for obstacles
     private float brakeTorque = 1000f;   
     
@@ -46,15 +47,15 @@ public class RobotController : MonoBehaviour
     private float integral = 0f;
 
     // Raycast settings
-    private float rayDistance = 4.0f;  // Increased for earlier edge detection
-    private float obstacleDetectionDist = 3.0f;
+    private float rayDistance = 10.0f;  // Increased for earlier edge detection
+    private float obstacleDetectionDist = 10.0f;
 
     private void Start()
     {
         // 1. Configure Sensors
         // The instructions allow us to rotate sensors in code. 
         // We rotate them 90 degrees on X so 'transform.forward' points down at the track.
-        Quaternion facingDown = Quaternion.Euler(-90, 0, 0);
+        Quaternion facingDown = Quaternion.Euler(90, 0, 0);
         
         if(L1S) L1S.localRotation = facingDown;
         if(L2S) L2S.localRotation = facingDown;
